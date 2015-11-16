@@ -1,0 +1,14 @@
+; $Id: uc_pagseguro.info,v 0.1 2008/11/07 21:13:29 Exp $
+name = pagseguro
+description = Habilita o metodo do pagseguro, esta funcionando calculo de frete e retorno automatico explicacao no aquivo LEIAME
+dependencies[] = uc_payment
+package = Ubercart - payment
+core = 6.x
+php = 5.0
+
+; Information added by drupal.org packaging script on 2009-11-18
+version = "6.x-2.2"
+core = "6.x"
+project = "ubercart"
+datestamp = "1258583492"
+

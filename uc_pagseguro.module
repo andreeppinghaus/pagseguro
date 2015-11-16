@@ -1,0 +1,415 @@
+<?php
+/**
+ * $Id: uc_pagseguro.module,v 1.6.2.00 (BETA) 24/11/2009 21:04
+ *
+ * Módulo de conexão com o Ubercart para pagamento dos produtos no pagseguro
+ * Este módulo possui a licenca LGPLv3.
+ * Este módulo foi modificado do módulo 2Checkout para a versão do drupal 6.x-2.2 
+ *
+ * Arquivo: LEIAME com instrucoes de instalação e configuracao
+ *
+ * Autor: André Eppinghaus
+ * Site de teste: www.avaliacao@kinghost.net/loja_virtual
+ * Email: andreeppinghaus@gmail.com
+ * Alterações, sugestões, dúvidas sobre instalação me mande um email
+ *
+ */
+
+/**
+ * @file
+ * Integrates pagseguro.com's redirected payment service.
+ * copy of 2checkout
+ */
+
+
+/**
+ * Implementation of hook_menu().
+ */
+function uc_pagseguro_menu() {
+	$items = array();
+
+	$items['cart/pagseguro/complete'] = array(
+    'title' => 'Order complete',
+    'page callback' => 'uc_pagseguro_complete',
+    'access callback' => 'uc_pagseguro_completion_access',
+    'type' => MENU_CALLBACK,
+    'file' => 'uc_pagseguro.pages.inc',
+	);
+	$items['cart/pagseguro/finalize'] = array(
+    'title' => 'Order complete',
+    'page callback' => 'uc_pagseguro_finalize',
+    'access callback' => 'uc_pagseguro_completion_access',
+    'type' => MENU_CALLBACK,
+    'file' => 'uc_pagseguro.pages.inc',
+	);
+
+
+	$items['cart/pagseguro/retorno'] = array (//botões do modulo
+    'page callback' => 'uc_pagseguro_retorno',
+    'access callback' => TRUE,  
+    'type' => MENU_CALLBACK, 
+    'weight' => 1,
+	);
+
+	return $items;
+}
+
+/**
+ * Implementation of hook_init().
+ */
+function uc_pagseguro_init() {
+	global $conf;
+	$conf['i18n_variables'][] = 'uc_pagseguro_method_title';
+	$conf['i18n_variables'][] = 'uc_pagseguro_checkout_button';
+}
+
+/**
+ * Make sure anyone can complete their pagseguro orders.
+ */
+function uc_pagseguro_completion_access() {
+	return TRUE;
+}
+
+/**
+ * Implementation of hook_ucga_display().
+ */
+function uc_pagseguro_ucga_display() {
+	// Tell UC Google Analytics to display the e-commerce JS on the custom
+	// order completion page for this module.
+	if (arg(0) == 'cart' && arg(1) == 'pagseguro' && arg(2) == 'finalize') {
+		return TRUE;
+	}
+}
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function uc_pagseguro_form_alter(&$form, &$form_state, $form_id) {
+	if ($form_id == 'uc_cart_checkout_review_form' && ($order_id = intval($_SESSION['cart_order'])) > 0) {
+		$order = uc_order_load($order_id);
+
+
+		if ($order->payment_method == 'pagseguro') {
+			//	print_r($order);
+
+			//pega o email do vendedor pela tela de Configurações de pagamento
+
+			$email_vendedor = variable_get('uc_pagseguro_sid', '');
+
+			//verifica se foi configurado
+			if ($email_vendedor== '') {
+				watchdog('pagseguro', "Email do vendedor@pagseguro não está cadastrado");
+
+				drupal_set_message("Problemas com a configuração desta loja por favor avise ao administrador");
+				return;
+			}else {
+				//biblioteca do site uolpagseguro
+				include_once('biblioteca_pagseguro_v0.21/pgs.php');
+
+				// Criando um novo carrinho
+
+				$pgs=new pgs(array('email_cobranca'=>$email_vendedor, 'ref_transacao'=>$order->order_id));
+					
+
+				// acrescentando o cliente
+				$pgs->cliente(
+				array (
+ 					  'nome'   => $order->billing_first_name,
+   					  'cep'    => $order->billing_postal_code,
+   					  'end'    => $order->billing_street1,
+    				  'compl'  => $order->billing_street2,
+   					  'cidade' =>  $order->billing_city,
+   					  'pais'   => 'Brasil',
+   					  'tel'    => $order->billing_phone,
+   					  'email'  =>$order->primary_email,
+				)
+				);
+
+				$numero_itens = count($order->products); //pega total de produtos
+				for ($x=0;$x<$numero_itens;$x++) {
+					// Adicionando um produto
+					$id_produto = $order->products[$x]->order_product_id;
+					//echo "<p> $x== $id_produto";
+					$pgs->adicionar( array(
+					array(
+					       "id"=>"$id_produto",
+                           "descricao"=>$order->products[$x]->title,
+                           "valor"=>$order->products[$x]->price,
+                           "peso"=>$order->products[$x]->weight,
+                          "quantidade"=>$order->products[$x]->qty,
+					),
+					));
+
+				} //fim de acrescimo de produtos para o pagseguro
+
+				//print_r($aa);
+				//echo ("Produtos:". $numero_itens) ;
+
+			}
+			drupal_add_css(drupal_get_path('module', 'uc_pagseguro') .'/uc_pagseguro.css');
+			unset($form['submit']);
+			$form['#prefix'] = '<table id="two-checkout-review-table"><tr><td>';
+			$form['#suffix'] = '</td><td>'.$pgs->mostra().'</td></tr></table>';
+
+
+		}
+	}
+}
+
+/**
+ * Implementation of hook_payment_method().
+ *
+ * @see uc_payment_method_pagseguro()
+ */
+function uc_pagseguro_payment_method() {
+	$path = base_path() . drupal_get_path('module', 'uc_pagseguro');
+	$title = variable_get('uc_pagseguro_method_title', 'Clique no Botão <b>Revisar Pedido</b> no Final desta página para realizar o pagamento no PagSeguro');
+	$title .= '<br /><img src="https://p.simg.uol.com.br/pagseguro/i/home/sprite_flags.gif" style="position: relative; left: 2.5em;">';
+
+	$methods[] = array(
+    'id' => 'pagseguro',
+    'name' => t('pagseguro'),
+    'title' => $title,
+    //'review' => variable_get('uc_pagseguro_check', FALSE) ? t('Credit card/eCheck') : 'e frete calculados pelo PagSeguro',
+    'review' => 'e frete calculados pelo PagSeguro',
+    'desc' => 'Produto sem desconto',
+    'callback' => 'uc_payment_method_pagseguro',
+    'weight' => 3,
+    'checkout' => TRUE,
+    'no_gateway' => TRUE,
+	);
+
+	return $methods;
+}
+
+
+/**
+ * Add pagseguro settings to the payment method settings form.
+ *
+ * @see uc_pagseguro_payment_method()
+ */
+function uc_payment_method_pagseguro($op, &$arg1) {
+	switch ($op) {
+		case 'cart-details':
+			if (variable_get('uc_pagseguro_check', FALSE)) {
+				if ($_SESSION['pay_method'] == 'CK') {
+					$sel[2] = ' selected="selected"';
+				}
+				else {
+					$sel[1] = ' selected="selected"';
+				}
+				unset($_SESSION['pay_method']);
+				$details = '<div class="form-item"><b>'. t('Select your payment type:')
+				.'</b> <select name="pay_method" class="form-select" id="edit-pay-method">'
+				.'<option value="CC"'. $sel[1] .'>'. t('Credit card') .'</option>'
+				.'<option value="CK"'. $sel[2] .'>'. t('Online check') .'</option></select></div>';
+			}
+			return $details;
+
+		case 'cart-process':
+			$_SESSION['pay_method'] = $_POST['pay_method'];
+			return;
+
+		case 'settings':
+			$form['uc_pagseguro_sid'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Digite o email do vendedor.'),
+        '#description' => t('Email cadastrado com o perfil de vendedor no UolPagSeguro.'),
+        '#default_value' => variable_get('uc_pagseguro_sid', ''),
+        '#size' => 50,
+			);
+
+			$form['uc_pagseguro_secret_word'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Número do TOKEN para retorno Automático'),
+        '#description' => t('Digite aqui o número do TOKEN criado no UolPagSeguro veja Menu de Retorno'),
+        '#default_value' => variable_get('uc_pagseguro_secret_word', ''),
+        '#size' => 50,
+			);
+			return $form;
+	}
+}
+
+
+/**
+ * Implementation of hook_init().
+ */
+
+
+function uc_pagseguro_retorno() {
+	global $user;
+
+	$token_vendedor = variable_get('uc_pagseguro_secret_word', '');
+
+	//watchdog('pagseguro', "Recebeu o post ");
+
+	// RECEBE O POST ENVIADO PELA PagSeguro E ADICIONA OS VALORES PARA VALIDAÇÃO DOS DADOS
+	$PagSeguro = 'Comando=validar';
+	$PagSeguro .= '&Token='.$token_vendedor;
+	$Cabecalho = "";
+
+	foreach ($_POST as $key => $value)
+	{
+		$value = urlencode(stripslashes($value));
+		$PagSeguro .= "&$key=$value";
+	}
+
+	if (function_exists('curl_exec'))
+	{
+		//Prefira utilizar a função CURL do PHP
+		//Leia mais sobre CURL em: http://us3.php.net/curl
+		$curl = true;
+	}
+	elseif ( (PHP_VERSION >= 4.3) && ($fp = @fsockopen ('ssl://pagseguro.uol.com.br', 443, $errno, $errstr, 30)) )
+	{
+		$fsocket = true;
+	}
+	elseif ($fp = @fsockopen('pagseguro.uol.com.br', 80, $errno, $errstr, 30))
+	{
+		$fsocket = true;
+	}
+
+	// ENVIA DE VOLTA PARA A PagSeguro OS DADOS PARA VALIDAÇÃO
+	if ($curl == true)
+	{
+		$ch = curl_init();
+		//watchdog('pagseguro', "Enviou ao pagseguro a verificacao de Seguranca");
+		curl_setopt($ch, CURLOPT_URL, 'https://pagseguro.uol.com.br/pagseguro-ws/checkout/NPI.jhtml');
+		curl_setopt($ch, CURLOPT_POST, true);
+		curl_setopt($ch, CURLOPT_POSTFIELDS, $PagSeguro);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_HEADER, false);
+		curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+
+		$resp = curl_exec($ch);
+
+		if (sizeof($resp)>0)
+		{
+			curl_setopt($ch, CURLOPT_URL, 'https://pagseguro.uol.com.br/pagseguro-ws/checkout/NPI.jhtml');
+			$resp = curl_exec($ch);
+			//watchdog('pagseguro', "retornou do pagseguro retorno=$resp - enviado=$PagSeguro ");
+		}
+
+		curl_close($ch);
+		$confirma = (strcmp ($resp, "VERIFICADO") == 0);
+	}
+	elseif ($fsocket == true)
+	{
+		$Cabecalho  = "POST /pagseguro-ws/checkout/NPI.jhtml HTTP/1.0\r\n";
+		$Cabecalho .= "Content-Type: application/x-www-form-urlencoded\r\n";
+		$Cabecalho .= "Content-Length: " . strlen($PagSeguro) . "\r\n\r\n";
+
+		if ($fp || $errno>0)
+		{
+			fputs ($fp, $Cabecalho . $PagSeguro);
+			$confirma = false;
+			$resp = '';
+			while (!feof($fp))
+			{
+	   $res = @fgets ($fp, 1024);
+	   $resp .= $res;
+	   // Verifica se o status da transação está VERIFICADO
+	   if (strcmp ($res, "VERIFICADO") == 0)
+	   {
+	   	//watchdog('pagseguro', "Verificado ");
+	   	$confirma=true;
+	   	break;
+	   }
+			}
+			fclose ($fp);
+		}
+		else
+		{
+			echo "$errstr ($errno)<br />\n";
+			// ERRO HTTP
+		}
+	}
+
+	//watchdog('pagseguro', "verifica o confirma= $confirma");
+	if ($confirma)
+	{
+		//watchdog('pagseguro', "confirma ok ");
+		// RECEBE OS DADOS ENVIADOS PELA PagSeguro E ARMAZENA EM VARIÁVEIS
+		//Selecione aqui todos os parâmetros enviados pela PagSeguro
+		$TransacaoID = check_plain($_POST['TransacaoID']);
+		$Referencia = $_POST['Referencia'];
+		$StatusTransacao = check_plain($_POST['StatusTransacao']);
+		$CliNome = check_plain($_POST['CliNome']);
+		$NumItens = check_plain($_POST['NumItens']);
+		$TipoPagamento = check_plain($_POST['TipoPagamento']);
+
+		$order_id=$Referencia;
+		$order = uc_order_load($Referencia);
+		//watchdog('pagseguro', "Referencia:$Referencia");
+
+		/**
+		 * O bloco abaixo e copia da versao 5
+		 * Este modulo nao esta verificando o total pago pelos produtos
+		 * Estou cadastrando no banco que pagou o valor total vindo de $order->order_total
+		 */
+
+	 switch ($StatusTransacao) {
+	 	case 'Completo':
+	 		$comment = "Compra concluída com $TipoPagamento, TransaçãoID #{$Referencia}";
+	 		uc_order_update_status($order->order_id, 'complete');
+
+	 		watchdog('pagseguro', "Compra concluída - $StatusTransacao");
+	 		break;
+
+	 	case 'Aguardando Pagto':
+	 		$comment = "Aguardando pagamento do cliente: TransaçãoID #{$order->order_id}.";
+
+	 		uc_payment_enter($order->order_id, 'pagseguro', $order->order_total, 0, NULL, $comment);
+
+	 		uc_cart_complete_sale($order); //armazena no log de vendas
+	 		watchdog('pagseguro', "Aguardando pagamento - $StatusTransacao");
+
+	 		break;
+	 	case 'Aprovado':
+	 		$comment = "Pagamento aprovado, aguardando compensação: TransaçãoID #{$order->order_id}"; 
+	 		uc_order_update_status($order->order_id, 'payment_received');
+	 		watchdog('pagseguro', "Pagamento aprovado, aguardando compensação - $StatusTransacao");
+	 		break;
+	 	case 'Em Análise':
+	 		$comment = "Pagamento aprovado, em análise pelo PagSeguro: TransaçãoID #{$order->order_id}"; 
+	 		uc_order_update_status($order->order_id, 'processing');
+	 		watchdog('pagseguro', "Pagamento aprovado, aguardando compensação - $StatusTransacao");
+	 		break;
+	 	case 'Cancelado:':
+	 		$comment = "Pagamento cancelado pelo PagSeguro: TransaçãoID #{$order->order_id}";
+	 		uc_order_update_status($order->order_id, 'canceled');
+	 		watchdog('pagseguro', "Pagamento Cancelado, aguardando compensação - $StatusTransacao");
+	 		break;
+
+	 }
+
+	 drupal_set_message($coment);
+	 uc_order_comment_save($order->order_id, 0, "Pagamento $TipoPagamento para pedido n&ordm;: {$order->order_id} está com status $StatusTransacao no PagSeguro.");
+	 uc_order_save($order);
+
+	}
+	else
+	{
+		if (strcmp ($res, "FALSO") == 0)
+		{
+			$coment = "Código inválido";
+			// LOG para investigação manual
+			watchdog('pagseguro', "TOKEN Falso",WATCHDOG_ERROR);
+		}//fim if
+	}//fim if
+
+	//limpa o carrinho
+	uc_cart_empty($user->uid);
+	//	watchdog('pagseguro', " Limpando carro >>".$user->uid);
+
+	echo "<p><h1> Compra efetuada com sucesso.</h1></p>";
+	// Javascript redirect on the finalization page.
+	$output = '<script type="text/javascript">window.location = "'. url("cart", array('absolute' => TRUE)) .'";</script>';
+
+	//watchdog('pagseguro', "foi para o cart");
+	//drupal_goto("cart");
+	print $output;
+	exit();
+} //fim funcao
+
